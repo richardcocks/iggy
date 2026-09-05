@@ -344,12 +344,17 @@ internal static class TcpContracts
         position += 4;
 
         // The producer owns message ids: a zero id is minted before the frame checksum covers it.
+        // A zero id is filled with random bytes directly (fast, non-crypto): the id is opaque,
+        // not keyed on, and 128 bits keeps collisions far below the birthday bound. The scratch
+        // buffer is hoisted out of the loop so the stackalloc runs once (CA2014).
         var originTimestamp = ulong.MaxValue;
+        Span<byte> idBytes = stackalloc byte[16];
         foreach (var message in messages)
         {
             if (message.Header.Id == 0)
             {
-                message.Header = message.Header with { Id = Guid.NewGuid().ToUInt128() };
+                Random.Shared.NextBytes(idBytes);
+                message.Header = message.Header with { Id = BinaryPrimitives.ReadUInt128LittleEndian(idBytes) };
             }
 
             originTimestamp = Math.Min(originTimestamp, message.Header.OriginTimestamp);
