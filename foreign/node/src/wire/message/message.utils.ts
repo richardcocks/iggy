@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { uuidv4 } from 'uuidv7';
 import { uint32ToBuf, u128ToBuf, uint8ToBuf } from '../number.utils.js';
 import { serializeHeaders, type Headers } from './header.utils.js';
 import { serializeIdentifier, type Id } from '../identifier.utils.js';
@@ -31,6 +30,9 @@ import {
 
 /** Size of the message ID in bytes (u128) */
 const MESSAGE_ID_SIZE = 16;
+
+/** Exclusive upper bound for a numeric message ID: a u128 must be < 2^128. */
+const MESSAGE_ID_UPPER_BOUND = 1n << 128n;
 
 /** Largest representable frame timestamp delta (u32, microseconds) */
 const MAX_TIMESTAMP_DELTA = 0xFFFF_FFFFn;
@@ -99,6 +101,8 @@ export const serializeMessageId = (id?: unknown) => {
       throw new Error(`invalid message id: '${id}' (numeric id must be >= 0)`)
 
     const idValue = 'number' === typeof id ? BigInt(id) : id;
+    if (idValue >= MESSAGE_ID_UPPER_BOUND)
+      throw new Error(`invalid message id: '${id}' (numeric id must be < 2^128)`)
     return u128ToBuf(idValue);
   }
 
@@ -115,16 +119,43 @@ export const serializeMessageId = (id?: unknown) => {
 }
 
 /**
- * Serializes a message ID, minting a random UUID when the ID is
- * absent or zero.
+ * Mints a random 16-byte message ID.
+ *
+ * Fills the buffer with four little-endian 32-bit draws from `Math.random`
+ * (V8 xorshift128+) — no UUID string, no hex round-trip, no BigInt (issue
+ * #4066). The id is opaque, not keyed on, and need not be secret, so a
+ * non-cryptographic PRNG is appropriate; 128 bits keeps collisions far below
+ * the birthday bound at any realistic message rate. The all-zero result has
+ * probability 2^-128, so the "non-zero" intent holds without a per-message
+ * retry.
+ *
+ * @returns 16-byte buffer of random bytes
+ */
+const mintMessageId = (): Buffer => {
+  const b = Buffer.allocUnsafe(MESSAGE_ID_SIZE);
+  b.writeUInt32LE((Math.random() * 0x1_0000_0000) >>> 0, 0);
+  b.writeUInt32LE((Math.random() * 0x1_0000_0000) >>> 0, 4);
+  b.writeUInt32LE((Math.random() * 0x1_0000_0000) >>> 0, 8);
+  b.writeUInt32LE((Math.random() * 0x1_0000_0000) >>> 0, 12);
+  return b;
+};
+
+/**
+ * Resolves a message ID to a 16-byte little-endian buffer, minting a random
+ * one when the ID is absent or zero.
  *
  * @param id - Optional message ID
  * @returns 16-byte little-endian buffer containing a non-zero ID
  */
 const resolveMessageId = (id?: MessageIdKind): Buffer => {
+  // Hot path: an absent or explicit-zero id mints straight from the CSPRNG,
+  // skipping serialization and the all-zero byte scan entirely.
+  if (id === undefined || id === 0 || id === 0n)
+    return mintMessageId();
   const bId = serializeMessageId(id);
-  return bId.every((byte) => byte === 0)
-    ? u128ToBuf(BigInt(`0x${uuidv4().replaceAll('-', '')}`))
+  // A caller can still pass the all-zero nil UUID string; keep "zero id -> mint".
+  return 'string' === typeof id && bId.every((byte) => byte === 0)
+    ? mintMessageId()
     : bId;
 };
 
