@@ -80,7 +80,7 @@ export const deserializeToken = (p: Buffer, pos = 0): TokenSerialized => {
   const name = p.subarray(pos + 1, pos + 1 + nameLength).toString();
   const rest = p.subarray(pos + 1 + nameLength);
   let expiry = null;
-  let bytesRead = pos + 1 + nameLength;
+  let bytesRead = 1 + nameLength;
   if (rest.length >= 8) {
     expiry = toDate(rest.readBigUInt64LE(0));
     bytesRead += 8;
