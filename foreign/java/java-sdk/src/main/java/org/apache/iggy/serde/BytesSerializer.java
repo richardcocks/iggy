@@ -33,7 +33,6 @@ import org.apache.iggy.message.MessageHeader;
 import org.apache.iggy.message.MessageId;
 import org.apache.iggy.message.Partitioning;
 import org.apache.iggy.message.PollingStrategy;
-import org.apache.iggy.message.UuidMessageId;
 import org.apache.iggy.user.GlobalPermissions;
 import org.apache.iggy.user.Permissions;
 import org.apache.iggy.user.StreamPermissions;
@@ -45,7 +44,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Unified serializer for both blocking and async clients.
@@ -340,7 +339,12 @@ public final class BytesSerializer {
      */
     private static byte[] encodedMessageId(MessageId id) {
         if (id.toBigInteger().signum() == 0) {
-            return readAllBytes(new UuidMessageId(UUID.randomUUID()).toBytes());
+            // A zero id is filled with random bytes directly (fast, non-crypto):
+            // the id is opaque, not keyed on, and 128 bits keeps collisions far
+            // below the birthday bound at any realistic message rate.
+            byte[] minted = new byte[16];
+            ThreadLocalRandom.current().nextBytes(minted);
+            return minted;
         }
         return readAllBytes(id.toBytes());
     }
